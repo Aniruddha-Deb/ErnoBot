@@ -27,9 +27,10 @@ class ErnoBot(commands.Bot):
         self.add_cog(PounceCog(self))
 
     async def on_ready(self):
-        uri = "http://localhost:5000/bot"
+        uri = "http://localhost:5000"
         self.sio = socketio.AsyncClient()
-        await self.sio.connect(uri, callback=lambda : print(f"Connected to Server with sid {self.sio.sid}"))
+        await self.sio.connect(uri, namespaces=['/bot'])
+        print(f"Connected to Server with sid {self.sio.sid}")
 
 class Team:
     
@@ -132,7 +133,7 @@ class PounceCog(commands.Cog):
         if self.pounce_open and p_eligible:
             self.teams[team_name].pounce = arg
             await ctx.send(f"Team {team_name}: Your pounce has been registered")
-            await self.bot.sio.emit('pounce', team_name, callback=lambda : print("Sent message"))
+            await self.bot.sio.emit('pounce', team_name, namespace='/bot', callback=lambda : print("Sent message"))
         elif p_eligible and not self.pounce_open:
             await ctx.send("Could not register pounce: window closed or no question active")
 
