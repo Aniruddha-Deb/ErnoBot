@@ -13,6 +13,7 @@ import socketio
 from socketio import AsyncClientNamespace
 
 ROLE_QM = "Quizmaster"
+QM_CHANNEL = "quizmaster"
 
 TEAM_TEXTS = "Team Text Channels"
 TEAM_VCS = "Team Voice Channels"
@@ -47,6 +48,14 @@ class BotNamespace(AsyncClientNamespace):
         team_cog.num_teams = int(data)
         if team_cog.rt != -1:
             await team_cog.emit_team_data()
+
+    async def on_pounce_open(self, data):
+        pounce_cog = self.bot.get_cog('PounceCog')
+        await pounce_cog.pounce_open()
+
+    async def on_pounce_close(self, data):
+        pounce_cog = self.bot.get_cog('PounceCog')
+        await pounce_cog.pounce_close()
 
 class Team:
     
@@ -84,9 +93,6 @@ class TeamCog(commands.Cog):
         roles = [role for role in guild.roles if role.name.startswith(TEAM_PREFIX) and
                 int(role.name.split("-")[1]) in team_range]
         
-        print(n)
-        print(roles)
-        print(self.rt)
         if self.rt == -1:
             # have not created any teams. Need to create teams
             print("Creating teams")
@@ -97,6 +103,9 @@ class TeamCog(commands.Cog):
                 self.teams[role.name] = team
                 team.text_channel = get(guild.text_channels, name=f"team-{tno}")
                 team.voice_channel = get(guild.voice_channels, name=f"team-{tno}")
+
+            print("Getting QuizMaster channel")
+            self.qm_channel = get(guild.text_channels, name=QM_CHANNEL)
 
         self.rt = time.time()
         members = await guild.fetch_members().flatten()
@@ -132,6 +141,7 @@ class PounceCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.teams = self.bot.get_cog("TeamCog").teams
+        self.qm_channel = self.bot.get_cog("TeamCog").qm_channel
         self.pounce_open = False
 
     @commands.command(name="p", help="pounce on active question")
@@ -152,40 +162,24 @@ class PounceCog(commands.Cog):
         elif not self.pounce_open:
             await ctx.message.add_reaction("❌")
 
-        # TODO relay pounces to server in given format
-
-    @commands.command(name="pc", help="Closes pounce")
-    @commands.has_any_role(ROLE_QM)
-    async def pounce_close(self, ctx):
+    #@commands.command(name="pc", help="Closes pounce")
+    #@commands.has_any_role(ROLE_QM)
+    async def pounce_close(self):
         if self.pounce_open:
             self.pounce_open = False
             pounces = ""
             for team in self.teams:
                 pounces += f"{self.teams[team].name}: {self.teams[team].pounce}\n"
-                await self.teams[team].text_channel.send("Pounce is now closed")
             
-            await ctx.message.add_reaction("✅")
-            # fingers crossed the QM does it from his own channel, otherwise 
-            # everyone will get to see everyone else's pounces :/
-            await ctx.send(pounces)
-            await self.bot.sio.emit('pounce_close', "none", namespace='/bot', callback=lambda : print("Sent message"))
-        else:
-            await ctx.message.add_reaction("❌")
-
+            await self.qm_channel.send(pounces)
     
-    @commands.command(name="po", help="Opens pounce")
-    @commands.has_any_role(ROLE_QM)
-    async def pounce_open(self, ctx):
+    #@commands.command(name="po", help="Opens pounce")
+    #@commands.has_any_role(ROLE_QM)
+    async def pounce_open(self):
         if not self.pounce_open:
             self.pounce_open = True
             for team in self.teams:
-                await self.teams[team].text_channel.send("Pounce is now open!")
                 self.teams[team].pounce = ""
-            await ctx.message.add_reaction("✅")
-        else:
-            await ctx.message.add_reaction("❌")
-
-        # TODO relay pounce open to server
 
 if __name__ == "__main__":
     load_dotenv()
