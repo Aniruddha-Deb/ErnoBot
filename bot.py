@@ -1,5 +1,6 @@
 import re
 import time
+import json
 
 import discord
 from dotenv import load_dotenv
@@ -9,13 +10,14 @@ from os import environ
 
 import asyncio
 import socketio
+from socketio import AsyncClientNamespace
 
 ROLE_QM = "Quizmaster"
 
 TEAM_TEXTS = "Team Text Channels"
 TEAM_VCS = "Team Voice Channels"
 
-TEAM_PREFIX = "Team "
+TEAM_PREFIX = "team-"
 
 class ErnoBot(commands.Bot):
 
@@ -29,14 +31,28 @@ class ErnoBot(commands.Bot):
     async def on_ready(self):
         uri = "http://localhost:5000"
         self.sio = socketio.AsyncClient()
+        self.sio.register_namespace(BotNamespace('/bot', self))
         await self.sio.connect(uri, namespaces=['/bot'])
         print(f"Connected to Server with sid {self.sio.sid}")
 
+
+class BotNamespace(AsyncClientNamespace):
+
+    def __init__(self, namespace, bot):
+        super().__init__(namespace)
+        self.bot = bot
+
+    async def on_num_teams(self, data):
+        team_cog = self.bot.get_cog('TeamCog')
+        team_cog.num_teams = int(data)
+        if team_cog.rt != -1:
+            await team_cog.emit_team_data()
+
 class Team:
     
-    def __init__(self, team_name, role):
-        self.score = 0
+    def __init__(self, tno, team_name, role):
         self.name = team_name
+        self.tno = tno
         self.role = role
         self.members = []
         self.pounce = ""
@@ -44,32 +60,39 @@ class Team:
         self.voice_channel = None
     
     def __str__(self):
-        return f"{self.name} @ {self.score}: {self.members}"
+        return f"{self.name}: {self.members}"
 
 class TeamCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
         self.teams = {}
-        self.rt = -1;
+        self.num_teams = -1
+        self.rt = -1
 
     @commands.command(name="tc", help="Load teams into memory")
     @commands.has_any_role(ROLE_QM)
-    async def team_load(self, ctx, n: int):
+    async def team_load(self, ctx):
         print("Loading teams")
+        # Note that we NEED manual interaction in discord to init the teams, 
+        # because we need to get the guild where the quiz will take place, and 
+        # this can only come from the context and not previously (or rather is
+        # not worth the effort to keep previously)
+        n = self.num_teams
         guild = ctx.guild
         team_range = range(1,n+1)
         roles = [role for role in guild.roles if role.name.startswith(TEAM_PREFIX) and
-                int(role.name.split(" ")[1]) in team_range]
+                int(role.name.split("-")[1]) in team_range]
         
+        print(n)
         print(roles)
         print(self.rt)
         if self.rt == -1:
             # have not created any teams. Need to create teams
             print("Creating teams")
             for role in roles:
-                team = Team(role.name, role)
-                tno = int(role.name.split(" ")[1])
+                tno = int(role.name.split("-")[1])
+                team = Team(tno, role.name, role)
                 print(f"{role.name}: {tno}")
                 self.teams[role.name] = team
                 team.text_channel = get(guild.text_channels, name=f"team-{tno}")
@@ -87,32 +110,22 @@ class TeamCog(commands.Cog):
                     self.teams[role.name].members.append(member)
                     break
 
-        for team in self.teams:
-            print(self.teams[team])
+        await self.emit_team_data()
 
-    @commands.command(name="ts", help="Scores teams")
-    @commands.has_any_role(ROLE_QM)
-    async def score(self, ctx, score: int, *teams: int):
-        for team in teams:
-            tname = TEAM_PREFIX+str(team)
-            self.teams[tname].score += score
-            curr_score = self.teams[tname].score
-            await self.teams[tname].text_channel.send(f"You got {score} points for that question. Current score: {curr_score}")
+        await ctx.message.add_reaction("✅")
 
-    @commands.command(name="td", help="Specifies direct to which team")
-    @commands.has_any_role(ROLE_QM)
-    async def direct_to(self, ctx, team: int):
-        for key in self.teams:
-            await self.teams[key].text_channel.send(f"Next question direct to team {team}")
-        
-    @commands.command(name="tl", help="Shows score leaderboard")
-    @commands.has_any_role(ROLE_QM)
-    async def leaderboard(self, ctx):
-        scores = ""
+    async def emit_team_data(self):
+        teams_data = []
         for team in self.teams:
-            scores += f"{self.teams[team].name}: {self.teams[team].score}\n"
-        for team in self.teams:
-            await self.teams[team].text_channel.send(scores)
+            team_data = {}
+            team_data['tno'] = self.teams[team].tno
+            team_data['members'] = []
+            for member in self.teams[team].members:
+                team_data['members'].append(member.name)
+            teams_data.append(team_data)
+
+        await self.bot.sio.emit('reg_teams', json.dumps(teams_data), namespace='/bot', callback=lambda : print("Sent message"))
+
 
 class PounceCog(commands.Cog):
     
@@ -123,19 +136,23 @@ class PounceCog(commands.Cog):
 
     @commands.command(name="p", help="pounce on active question")
     async def pounce(self, ctx, *, arg):
-        p_eligible = False
-        team_name = None
-        for role in ctx.author.roles:
-            if role.name.startswith(TEAM_PREFIX):
-                p_eligible = True
-                team_name = role.name
+
+        team_name = ctx.channel.name
         
-        if self.pounce_open and p_eligible:
+        if self.pounce_open and re.match(r'team\-[0-9]+', team_name):
             self.teams[team_name].pounce = arg
-            await ctx.send(f"Team {team_name}: Your pounce has been registered")
-            await self.bot.sio.emit('pounce', team_name, namespace='/bot', callback=lambda : print("Sent message"))
-        elif p_eligible and not self.pounce_open:
-            await ctx.send("Could not register pounce: window closed or no question active")
+            await ctx.message.add_reaction("✅")
+
+            pounce_data = {
+                "tno": self.teams[team_name].tno,
+                "discord_id": ctx.author.name,
+                "pounce": arg
+            }
+            await self.bot.sio.emit('pounce', json.dumps(pounce_data), namespace='/bot', callback=lambda : print("Sent message"))
+        elif not self.pounce_open:
+            await ctx.message.add_reaction("❌")
+
+        # TODO relay pounces to server in given format
 
     @commands.command(name="pc", help="Closes pounce")
     @commands.has_any_role(ROLE_QM)
@@ -147,12 +164,13 @@ class PounceCog(commands.Cog):
                 pounces += f"{self.teams[team].name}: {self.teams[team].pounce}\n"
                 await self.teams[team].text_channel.send("Pounce is now closed")
             
-            await ctx.send("Closed pounce")
+            await ctx.message.add_reaction("✅")
             # fingers crossed the QM does it from his own channel, otherwise 
             # everyone will get to see everyone else's pounces :/
             await ctx.send(pounces)
+            await self.bot.sio.emit('pounce_close', "none", namespace='/bot', callback=lambda : print("Sent message"))
         else:
-            await ctx.send("Could not close pounce, a pounce window might not be open")
+            await ctx.message.add_reaction("❌")
 
     
     @commands.command(name="po", help="Opens pounce")
@@ -163,9 +181,11 @@ class PounceCog(commands.Cog):
             for team in self.teams:
                 await self.teams[team].text_channel.send("Pounce is now open!")
                 self.teams[team].pounce = ""
-            await ctx.send("Opened pounce")
+            await ctx.message.add_reaction("✅")
         else:
-            await ctx.send("Could not open pounce, pounce window might already be open")
+            await ctx.message.add_reaction("❌")
+
+        # TODO relay pounce open to server
 
 if __name__ == "__main__":
     load_dotenv()
