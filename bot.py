@@ -42,20 +42,20 @@ class BotNamespace(AsyncClientNamespace):
     def __init__(self, namespace, bot):
         super().__init__(namespace)
         self.bot = bot
+        self.team_cog = self.bot.get_cog('TeamCog')
+        self.pounce_cog = self.bot.get_cog('PounceCog')
 
     async def on_num_teams(self, data):
-        team_cog = self.bot.get_cog('TeamCog')
-        team_cog.num_teams = int(data)
-        if team_cog.rt != -1:
-            await team_cog.emit_team_data()
+        self.team_cog.num_teams = int(data)
+        if self.team_cog.rt != -1:
+            await self.team_cog.emit_team_data()
 
     async def on_pounce_open(self, data):
-        pounce_cog = self.bot.get_cog('PounceCog')
-        await pounce_cog.pounce_open()
+        await self.pounce_cog.open_pounce()
 
     async def on_pounce_close(self, data):
-        pounce_cog = self.bot.get_cog('PounceCog')
-        await pounce_cog.pounce_close()
+        await self.pounce_cog.close_pounce()
+
 
 class Team:
     
@@ -141,7 +141,6 @@ class PounceCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.teams = self.bot.get_cog("TeamCog").teams
-        self.qm_channel = self.bot.get_cog("TeamCog").qm_channel
         self.pounce_open = False
 
     @commands.command(name="p", help="pounce on active question")
@@ -164,22 +163,25 @@ class PounceCog(commands.Cog):
 
     #@commands.command(name="pc", help="Closes pounce")
     #@commands.has_any_role(ROLE_QM)
-    async def pounce_close(self):
+    async def close_pounce(self):
         if self.pounce_open:
             self.pounce_open = False
             pounces = ""
             for team in self.teams:
-                pounces += f"{self.teams[team].name}: {self.teams[team].pounce}\n"
-            
-            await self.qm_channel.send(pounces)
-    
+                pounces = f"{self.teams[team].name}: {self.teams[team].pounce}\n" + pounces
+            qm_channel = self.bot.get_cog("TeamCog").qm_channel
+
+            await qm_channel.send(pounces)
+            await self.bot.sio.emit('pounce_closed', namespace='/bot', callback=lambda : print("Sent message"))
+
     #@commands.command(name="po", help="Opens pounce")
     #@commands.has_any_role(ROLE_QM)
-    async def pounce_open(self):
+    async def open_pounce(self):
         if not self.pounce_open:
             self.pounce_open = True
             for team in self.teams:
                 self.teams[team].pounce = ""
+            await self.bot.sio.emit('pounce_opened', namespace='/bot', callback=lambda : print("Sent message"))
 
 if __name__ == "__main__":
     load_dotenv()
