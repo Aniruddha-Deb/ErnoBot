@@ -172,7 +172,7 @@ class PounceCog(commands.Cog):
             qm_channel = self.bot.get_cog("TeamCog").qm_channel
 
             await qm_channel.send(pounces)
-            await self.bot.sio.emit('pounce_closed', namespace='/bot', callback=lambda : print("Sent message"))
+            await self.bot.sio.emit('pounce_closed', "SUCCESS", namespace='/bot', callback=lambda : print("Sent message"))
 
     #@commands.command(name="po", help="Opens pounce")
     #@commands.has_any_role(ROLE_QM)
@@ -181,7 +181,7 @@ class PounceCog(commands.Cog):
             self.pounce_open = True
             for team in self.teams:
                 self.teams[team].pounce = ""
-            await self.bot.sio.emit('pounce_opened', namespace='/bot', callback=lambda : print("Sent message"))
+            await self.bot.sio.emit('pounce_opened', "SUCCESS", namespace='/bot', callback=lambda : print("Sent message"))
 
 if __name__ == "__main__":
     load_dotenv()
