@@ -27,6 +27,7 @@ class ErnoBot(commands.Bot):
         intents.members = True
         super().__init__(command_prefix=prefix, intents=intents)
         self.add_cog(TeamCog(self))
+        self.add_cog(HousekeepingCog(self))
         self.add_cog(PounceCog(self))
 
     async def on_ready(self):
@@ -70,6 +71,17 @@ class Team:
     
     def __str__(self):
         return f"{self.name}: {self.members}"
+
+class HousekeepingCog(commands.Cog):
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name="purge", help="Purges last n messages")
+    @commands.has_any_role(ROLE_QM)
+    async def purge(self, ctx, n=10000):
+        channel = ctx.channel
+        await channel.purge(limit=n)
 
 class TeamCog(commands.Cog):
 
